@@ -1,15 +1,31 @@
 class LinkRepair {
     constructor(options = {}) {
-        this.contentSelector = options.contentSelector || 'body'; // Default to entire page
+        this.contentSelector = options.contentSelector || 'body';
         this.checkInterval = options.checkInterval || 5000;
         this.verbose = options.verbose || false;
         this.waybackApiUrl = 'https://archive.org/wayback/available';
         this.checkedLinks = new Set();
         
+        // Default styles that can be overridden
+        this.styles = {
+            checking: options.styles?.checking || { opacity: '0.7' },
+            repaired: options.styles?.repaired || { backgroundColor: '#e6ffe6' },
+            failed: options.styles?.failed || { backgroundColor: '#ffe6e6' },
+        };
+
+        // Style class names can also be customized
+        this.classNames = {
+            checking: options.classNames?.checking || 'link-checking',
+            repaired: options.classNames?.repaired || 'link-repaired',
+            failed: options.classNames?.failed || 'link-failed'
+        };
+        
         this.log('LinkRepair initialized with options:', {
             contentSelector: this.contentSelector,
             checkInterval: this.checkInterval,
-            verbose: this.verbose
+            verbose: this.verbose,
+            styles: this.styles,
+            classNames: this.classNames
         });
         
         this.init();
@@ -36,19 +52,35 @@ class LinkRepair {
     init() {
         this.log('Initializing LinkRepair...');
         
-        // Create a style for visual feedback
-        const style = document.createElement('style');
-        style.textContent = `
-            .link-checking { opacity: 0.7; }
-            .link-repaired { background-color: #e6ffe6; }
-            .link-failed { background-color: #ffe6e6; }
-        `;
-        document.head.appendChild(style);
+        // Create CSS from style objects
+        const styleSheet = this.createStyleSheet();
+        document.head.appendChild(styleSheet);
         this.log('Styles injected');
         
-        // Start checking links
         this.startLinkCheck();
         this.log('Initial link check started');
+    }
+
+    createStyleSheet() {
+        const style = document.createElement('style');
+        const cssRules = [];
+
+        // Convert style objects to CSS rules
+        for (const [key, properties] of Object.entries(this.styles)) {
+            const className = this.classNames[key];
+            const cssProperties = Object.entries(properties)
+                .map(([prop, value]) => {
+                    // Convert camelCase to kebab-case
+                    const cssProperty = prop.replace(/([A-Z])/g, '-$1').toLowerCase();
+                    return `${cssProperty}: ${value}`;
+                })
+                .join(';');
+            
+            cssRules.push(`.${className} { ${cssProperties} }`);
+        }
+
+        style.textContent = cssRules.join('\n');
+        return style;
     }
 
     async startLinkCheck() {
@@ -58,7 +90,6 @@ class LinkRepair {
             return;
         }
 
-        // Get all links in the content area, including those in nested elements
         const links = contentArea.getElementsByTagName('a');
         this.log(`Found ${links.length} links in ${this.contentSelector}`);
         
@@ -67,13 +98,11 @@ class LinkRepair {
         let failedCount = 0;
 
         for (const link of links) {
-            // Skip links without href or javascript: links
             if (!link.href || link.href.startsWith('javascript:') || link.href.startsWith('mailto:')) {
                 this.log(`Skipping invalid or special link: ${link.href || 'no href'}`);
                 continue;
             }
 
-            // Skip already checked links
             if (this.checkedLinks.has(link.href)) {
                 this.log(`Skipping already checked link: ${link.href}`);
                 continue;
@@ -95,7 +124,7 @@ class LinkRepair {
 
     async checkLink(link) {
         try {
-            link.classList.add('link-checking');
+            link.classList.add(this.classNames.checking);
             this.log(`Testing link: ${link.href}`);
             
             const response = await fetch(link.href, { method: 'HEAD' });
@@ -107,12 +136,12 @@ class LinkRepair {
                 if (waybackUrl) {
                     this.log(`Found Wayback Machine version: ${waybackUrl}`);
                     link.href = waybackUrl;
-                    link.classList.add('link-repaired');
+                    link.classList.add(this.classNames.repaired);
                     link.title = 'This link was automatically repaired using Wayback Machine';
                     return 'repaired';
                 } else {
                     this.error(`No Wayback Machine version found for: ${link.href}`);
-                    link.classList.add('link-failed');
+                    link.classList.add(this.classNames.failed);
                     link.title = 'This link appears to be broken and could not be repaired';
                     return 'failed';
                 }
@@ -126,17 +155,17 @@ class LinkRepair {
             if (waybackUrl) {
                 this.log(`Found Wayback Machine version after error: ${waybackUrl}`);
                 link.href = waybackUrl;
-                link.classList.add('link-repaired');
+                link.classList.add(this.classNames.repaired);
                 link.title = 'This link was automatically repaired using Wayback Machine';
                 return 'repaired';
             } else {
                 this.error(`Failed to repair broken link: ${link.href}`);
-                link.classList.add('link-failed');
+                link.classList.add(this.classNames.failed);
                 link.title = 'This link appears to be broken and could not be repaired';
                 return 'failed';
             }
         } finally {
-            link.classList.remove('link-checking');
+            link.classList.remove(this.classNames.checking);
         }
     }
 
