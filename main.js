@@ -1,6 +1,6 @@
 class LinkRepair {
     constructor(options = {}) {
-        this.contentSelector = options.contentSelector || 'main, article, .content';
+        this.contentSelector = options.contentSelector || 'body'; // Default to entire page
         this.checkInterval = options.checkInterval || 5000;
         this.verbose = options.verbose || false;
         this.waybackApiUrl = 'https://archive.org/wayback/available';
@@ -54,23 +54,43 @@ class LinkRepair {
     async startLinkCheck() {
         const contentArea = document.querySelector(this.contentSelector);
         if (!contentArea) {
-            this.warn('Content area not found with selector:', this.contentSelector);
+            this.error('Fatal: Content area not found with selector:', this.contentSelector);
             return;
         }
 
+        // Get all links in the content area, including those in nested elements
         const links = contentArea.getElementsByTagName('a');
-        this.log(`Found ${links.length} links to check`);
+        this.log(`Found ${links.length} links in ${this.contentSelector}`);
         
+        let checkedCount = 0;
+        let repairedCount = 0;
+        let failedCount = 0;
+
         for (const link of links) {
+            // Skip links without href or javascript: links
+            if (!link.href || link.href.startsWith('javascript:') || link.href.startsWith('mailto:')) {
+                this.log(`Skipping invalid or special link: ${link.href || 'no href'}`);
+                continue;
+            }
+
+            // Skip already checked links
             if (this.checkedLinks.has(link.href)) {
                 this.log(`Skipping already checked link: ${link.href}`);
                 continue;
             }
             
             this.checkedLinks.add(link.href);
-            this.log(`Checking link: ${link.href}`);
-            await this.checkLink(link);
+            this.log(`Checking link ${++checkedCount}/${links.length}: ${link.href}`);
+            const result = await this.checkLink(link);
+            if (result === 'repaired') repairedCount++;
+            if (result === 'failed') failedCount++;
         }
+
+        this.log(`Link check complete. Summary:
+            Total links: ${links.length}
+            Checked: ${checkedCount}
+            Repaired: ${repairedCount}
+            Failed: ${failedCount}`);
     }
 
     async checkLink(link) {
@@ -78,12 +98,10 @@ class LinkRepair {
             link.classList.add('link-checking');
             this.log(`Testing link: ${link.href}`);
             
-            // First, try to fetch the URL directly
             const response = await fetch(link.href, { method: 'HEAD' });
             
             if (!response.ok) {
                 this.warn(`Link returned ${response.status}: ${link.href}`);
-                // If the link is broken, try to get it from Wayback Machine
                 const waybackUrl = await this.getWaybackUrl(link.href);
                 
                 if (waybackUrl) {
@@ -91,27 +109,31 @@ class LinkRepair {
                     link.href = waybackUrl;
                     link.classList.add('link-repaired');
                     link.title = 'This link was automatically repaired using Wayback Machine';
+                    return 'repaired';
                 } else {
                     this.error(`No Wayback Machine version found for: ${link.href}`);
                     link.classList.add('link-failed');
                     link.title = 'This link appears to be broken and could not be repaired';
+                    return 'failed';
                 }
             } else {
                 this.log(`Link is healthy: ${link.href}`);
+                return 'healthy';
             }
         } catch (error) {
             this.error(`Error checking link ${link.href}:`, error);
-            // Try Wayback Machine if the fetch fails
             const waybackUrl = await this.getWaybackUrl(link.href);
             if (waybackUrl) {
                 this.log(`Found Wayback Machine version after error: ${waybackUrl}`);
                 link.href = waybackUrl;
                 link.classList.add('link-repaired');
                 link.title = 'This link was automatically repaired using Wayback Machine';
+                return 'repaired';
             } else {
                 this.error(`Failed to repair broken link: ${link.href}`);
                 link.classList.add('link-failed');
                 link.title = 'This link appears to be broken and could not be repaired';
+                return 'failed';
             }
         } finally {
             link.classList.remove('link-checking');
