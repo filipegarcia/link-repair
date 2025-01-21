@@ -5,7 +5,8 @@ class LinkRepair {
         this.verbose = options.verbose || false;
         this.waybackApiUrl = 'https://archive.org/wayback/available';
         this.checkedLinks = new Set();
-        
+        this.cachedLinks = new Map(); // Store working replacements
+
         // Default styles that can be overridden
         this.styles = {
             checking: options.styles?.checking || { opacity: '0.7' },
@@ -96,6 +97,7 @@ class LinkRepair {
         let checkedCount = 0;
         let repairedCount = 0;
         let failedCount = 0;
+        let cachedCount = 0;
 
         for (const link of links) {
             if (!link.href || link.href.startsWith('javascript:') || link.href.startsWith('mailto:')) {
@@ -103,8 +105,19 @@ class LinkRepair {
                 continue;
             }
 
+            // Check if we have a cached working version
+            if (this.cachedLinks.has(link.href)) {
+                this.log(`Using cached replacement for: ${link.href}`);
+                link.href = this.cachedLinks.get(link.href);
+                link.classList.add(this.classNames.repaired);
+                link.title = 'This link was automatically repaired using cached version';
+                cachedCount++;
+                continue;
+            }
+
+            // If link was checked but not cached, it means it was working
             if (this.checkedLinks.has(link.href)) {
-                this.log(`Skipping already checked link: ${link.href}`);
+                this.log(`Skipping already verified link: ${link.href}`);
                 continue;
             }
             
@@ -119,47 +132,62 @@ class LinkRepair {
             Total links: ${links.length}
             Checked: ${checkedCount}
             Repaired: ${repairedCount}
+            From Cache: ${cachedCount}
             Failed: ${failedCount}`);
     }
 
     async checkLink(link) {
+        const originalUrl = link.href;
         try {
             link.classList.add(this.classNames.checking);
-            this.log(`Testing link: ${link.href}`);
+            this.log(`Testing link: ${originalUrl}`);
             
-            const response = await fetch(link.href, { method: 'HEAD' });
+            const response = await fetch(originalUrl, { method: 'HEAD' });
             
             if (!response.ok) {
-                this.warn(`Link returned ${response.status}: ${link.href}`);
-                const waybackUrl = await this.getWaybackUrl(link.href);
+                this.warn(`Link returned ${response.status}: ${originalUrl}`);
+                const waybackUrl = await this.getWaybackUrl(originalUrl);
                 
                 if (waybackUrl) {
                     this.log(`Found Wayback Machine version: ${waybackUrl}`);
                     link.href = waybackUrl;
                     link.classList.add(this.classNames.repaired);
                     link.title = 'This link was automatically repaired using Wayback Machine';
+                    // Cache the working replacement
+                    this.cachedLinks.set(originalUrl, waybackUrl);
                     return 'repaired';
                 } else {
-                    this.error(`No Wayback Machine version found for: ${link.href}`);
+                    this.error(`No Wayback Machine version found for: ${originalUrl}`);
                     link.classList.add(this.classNames.failed);
                     link.title = 'This link appears to be broken and could not be repaired';
                     return 'failed';
                 }
             } else {
-                this.log(`Link is healthy: ${link.href}`);
+                this.log(`Link is healthy: ${originalUrl}`);
                 return 'healthy';
             }
         } catch (error) {
-            this.error(`Error checking link ${link.href}:`, error);
-            const waybackUrl = await this.getWaybackUrl(link.href);
+            this.error(`Error checking link ${originalUrl}:`, error);
+            // Check cache before trying Wayback
+            if (this.cachedLinks.has(originalUrl)) {
+                const cachedUrl = this.cachedLinks.get(originalUrl);
+                link.href = cachedUrl;
+                link.classList.add(this.classNames.repaired);
+                link.title = 'This link was automatically repaired using cached version';
+                return 'repaired';
+            }
+            
+            const waybackUrl = await this.getWaybackUrl(originalUrl);
             if (waybackUrl) {
                 this.log(`Found Wayback Machine version after error: ${waybackUrl}`);
                 link.href = waybackUrl;
                 link.classList.add(this.classNames.repaired);
                 link.title = 'This link was automatically repaired using Wayback Machine';
+                // Cache the working replacement
+                this.cachedLinks.set(originalUrl, waybackUrl);
                 return 'repaired';
             } else {
-                this.error(`Failed to repair broken link: ${link.href}`);
+                this.error(`Failed to repair broken link: ${originalUrl}`);
                 link.classList.add(this.classNames.failed);
                 link.title = 'This link appears to be broken and could not be repaired';
                 return 'failed';
